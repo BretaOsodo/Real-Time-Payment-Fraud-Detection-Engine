@@ -1,0 +1,5 @@
+#generated fraud datasets
+*.json
+
+#environment file
+.env
