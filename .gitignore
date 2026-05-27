@@ -1,5 +1,17 @@
-#generated fraud datasets
-*.json
+# Virtual env
+.venv/
+venv/
 
-#environment file
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
 .env
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
