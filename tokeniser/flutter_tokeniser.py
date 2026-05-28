@@ -5,7 +5,6 @@ import logging
 import signal
 import time
 import uuid
-import re
 from datetime import datetime
 from typing import Dict, Optional, Tuple, Union
 from dataclasses import dataclass
@@ -20,41 +19,42 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class MpesaTokeniserConfig:
+class FlutterwaveTokeniserConfig:
     bootstrap_servers: str = "localhost:29092"
     security_protocol: str = "PLAINTEXT"
     sasl_mechanism: str = "PLAIN"
     sasl_username: str = ""
     sasl_password: str = ""
 
-    input_topic: str = "mpesa_raw"
-    output_topic: str = "mpesa_tokenised"
-    dlq_topic: str = "mpesa_dlq"
+    input_topic: str = "flutter_raw"
+    output_topic: str = "flutter_tokenised"
+    dlq_topic: str = "flutter_dlq"
 
-    consumer_group: str = "mpesa_tokeniser_group"
+    consumer_group: str = "flutter_tokeniser_group"
 
     hmac_secret: str = "CHANGE_ME_IN_PRODUCTION"
     max_cache_size: int = 100_000
     max_poll_interval_ms: int = 300000
 
 
-class MpesaTokeniser:
+class FlutterwaveTokeniser:
     """
-    M-Pesa Tokeniser Service
-    Consumes raw M-Pesa Daraja webhook messages from 'mpesa_raw' topic
-    Tokenises MSISDN (phone numbers) and sensitive fields
-    Produces tokenised transactions to 'mpesa_tokenised' topic
+    Flutterwave Tokeniser Service
+    Consumes raw Flutterwave webhook messages from 'flutter_raw' topic
+    Tokenises PAN (first 6 + last 4) and sensitive customer data
+    Produces tokenised transactions to 'flutter_tokenised' topic
     """
 
-    def __init__(self, config: MpesaTokeniserConfig = None):
-        self.config = config or MpesaTokeniserConfig()
+    def __init__(self, config: FlutterwaveTokeniserConfig = None):
+        self.config = config or FlutterwaveTokeniserConfig()
         self.consumer = None
         self.producer = None
         self.running = False
 
         # Token caches
-        self.msisdn_cache: Dict[str, str] = {}  # MSISDN → token
-        self.account_cache: Dict[str, str] = {}  # Business account → token
+        self.card_token_cache: Dict[str, str] = {}  # PAN → token
+        self.customer_token_cache: Dict[str, str] = {}  # customer email/phone → token
+        self.ref_token_cache: Dict[str, str] = {}  # transaction reference → token
 
         self.stats = {
             'total_consumed': 0,
@@ -63,8 +63,8 @@ class MpesaTokeniser:
             'total_errors': 0,
             'cache_hits': 0,
             'cache_misses': 0,
-            'msisdn_tokenised': 0,
-            'account_tokenised': 0,
+            'card_tokens': 0,
+            'customer_tokens': 0,
             'tokenisation_total_ms': 0.0,
         }
 
@@ -73,7 +73,7 @@ class MpesaTokeniser:
     def setup(self):
         self._setup_consumer()
         self._setup_producer()
-        logger.info("M-Pesa Tokeniser ready")
+        logger.info("Flutterwave Tokeniser ready")
 
     def _setup_consumer(self):
         config = {
@@ -115,54 +115,34 @@ class MpesaTokeniser:
         self.producer = Producer(config)
         logger.info("Producer ready")
 
-    # MSISDN (Phone Number) Validation
+    # Card Validation
 
-    def validate_msisdn(self, msisdn: str) -> Tuple[bool, Optional[str]]:
-        """Validate M-Pesa MSISDN format"""
-        if not msisdn:
-            return False, "MSISDN is empty"
+    def validate_pan(self, first6: str, last4: str) -> Tuple[bool, Optional[str]]:
+        """Validate Flutterwave card details (partial PAN)"""
+        if not first6 or not last4:
+            return False, "First 6 or last 4 digits missing"
 
-        # Clean MSISDN
-        msisdn = msisdn.strip().replace(" ", "").replace("+", "")
+        if not first6.isdigit() or len(first6) != 6:
+            return False, f"BIN must be 6 digits, got {len(first6)}"
 
-        # Check length (Kenyan numbers: 9-13 digits including country code)
-        if not (9 <= len(msisdn) <= 13):
-            return False, f"MSISDN length {len(msisdn)} invalid (must be 9-13)"
-
-        # Check if contains only digits
-        if not msisdn.isdigit():
-            return False, "MSISDN must contain only digits"
-
-        # Check Kenyan format (254XXXXXXXXX or 07XXXXXXXX)
-        if msisdn.startswith('254'):
-            if len(msisdn) != 12:
-                return False, "Kenyan MSISDN with country code must be 12 digits"
-        elif msisdn.startswith('0'):
-            if len(msisdn) != 10:
-                return False, "Kenyan MSISDN without country code must be 10 digits"
+        if not last4.isdigit() or len(last4) != 4:
+            return False, f"Last4 must be 4 digits, got {len(last4)}"
 
         return True, None
 
-    def normalise_msisdn(self, msisdn: str) -> str:
-        """Normalise MSISDN to E.164 format (254XXXXXXXXX)"""
-        if not msisdn:
-            return None
+    def validate_customer_email(self, email: str) -> Tuple[bool, Optional[str]]:
+        """Validate customer email format"""
+        if not email:
+            return True, None  # Email is optional
 
-        msisdn = msisdn.strip().replace(" ", "").replace("+", "")
+        if '@' not in email or '.' not in email:
+            return False, f"Invalid email format: {email}"
 
-        # Convert 07XXXXXXXX to 2547XXXXXXXX
-        if msisdn.startswith('0') and len(msisdn) == 10:
-            msisdn = '254' + msisdn[1:]
-
-        # Convert 7XXXXXXXX to 2547XXXXXXXX
-        if msisdn.startswith('7') and len(msisdn) == 9:
-            msisdn = '254' + msisdn
-
-        return msisdn
+        return True, None
 
     # Tokenisation
 
-    def _cache_key(self, value: str, prefix: str = "mpesa") -> str:
+    def _cache_key(self, value: str, prefix: str = "flutter") -> str:
         """Derive non-reversible cache key"""
         return hmac.new(
             self.config.hmac_secret.encode(),
@@ -170,89 +150,120 @@ class MpesaTokeniser:
             hashlib.sha256
         ).hexdigest()
 
-    def tokenise_msisdn(self, msisdn: str) -> Tuple[Optional[str], bool]:
+    def tokenise_card(self, first6: str, last4: str, flw_ref: str = None) -> Tuple[Optional[str], bool]:
         """
-        Tokenise M-Pesa MSISDN (phone number)
-        Format: MPESA_MSISDN_{hash}
-        Returns (token, from_cache)
+        Tokenise Flutterwave card data (partial PAN)
+        Format: FLW_{first6}_TOKEN_{hash}_{last4}
+        Preserves BIN and last4 for analytics
         """
-        if not msisdn:
+        if not first6 or not last4:
             return None, False
 
-        msisdn = self.normalise_msisdn(msisdn)
-        if not msisdn:
-            return None, False
+        composite_key = f"{first6}:{last4}:{flw_ref}" if flw_ref else f"{first6}:{last4}"
+        cache_key = self._cache_key(composite_key, "card")
 
-        cache_key = self._cache_key(msisdn, "msisdn")
-
-        if cache_key in self.msisdn_cache:
+        if cache_key in self.card_token_cache:
             self.stats['cache_hits'] += 1
-            return self.msisdn_cache[cache_key], True
+            return self.card_token_cache[cache_key], True
 
         self.stats['cache_misses'] += 1
         start = time.perf_counter()
 
-        # Generate deterministic token
+        # Generate deterministic token for the middle part
         token_hash = hmac.new(
             self.config.hmac_secret.encode(),
-            msisdn.encode(),
+            composite_key.encode(),
             hashlib.sha256
-        ).hexdigest()[:16].upper()
+        ).hexdigest()[:12].upper()
 
-        token = f"MPESA_MSISDN_{token_hash}"
+        # Format: FLW_{BIN}_TOKEN_{HASH}_{LAST4}
+        token = f"FLW_{first6}_TOKEN_{token_hash}_{last4}"
 
         # Evict oldest 20% if cache is full
-        if len(self.msisdn_cache) >= self.config.max_cache_size:
+        if len(self.card_token_cache) >= self.config.max_cache_size:
             evict_count = self.config.max_cache_size // 5
-            for key in list(self.msisdn_cache.keys())[:evict_count]:
-                del self.msisdn_cache[key]
+            for key in list(self.card_token_cache.keys())[:evict_count]:
+                del self.card_token_cache[key]
 
-        self.msisdn_cache[cache_key] = token
-        self.stats['msisdn_tokenised'] += 1
+        self.card_token_cache[cache_key] = token
+        self.stats['card_tokens'] += 1
         self.stats['tokenisation_total_ms'] += (time.perf_counter() - start) * 1000
 
         return token, False
 
-    def tokenise_account(self, account: Union[str, int]) -> Tuple[Optional[str], bool]:
+    def tokenise_customer(self, customer_id: str, email: str = None, phone: str = None) -> Tuple[Optional[str], bool]:
         """
-        Tokenise business account number/shortcode
-        Format: MPESA_ACC_{hash}
+        Tokenise customer identifier
+        Format: FLW_CUST_{hash}
         """
-        if not account:
+        if not customer_id and not email and not phone:
             return None, False
 
-        account_str = str(account)
-        cache_key = self._cache_key(account_str, "account")
+        composite_key = f"{customer_id}:{email}:{phone}" if customer_id else f"{email}:{phone}"
+        cache_key = self._cache_key(composite_key, "customer")
 
-        if cache_key in self.account_cache:
-            return self.account_cache[cache_key], True
+        if cache_key in self.customer_token_cache:
+            return self.customer_token_cache[cache_key], True
 
         start = time.perf_counter()
 
         token_hash = hmac.new(
             self.config.hmac_secret.encode(),
-            account_str.encode(),
+            composite_key.encode(),
             hashlib.sha256
-        ).hexdigest()[:12].upper()
+        ).hexdigest()[:16].upper()
 
-        token = f"MPESA_ACC_{token_hash}"
+        token = f"FLW_CUST_{token_hash}"
 
-        if len(self.account_cache) >= self.config.max_cache_size:
+        if len(self.customer_token_cache) >= self.config.max_cache_size:
             evict_count = self.config.max_cache_size // 5
-            for key in list(self.account_cache.keys())[:evict_count]:
-                del self.account_cache[key]
+            for key in list(self.customer_token_cache.keys())[:evict_count]:
+                del self.customer_token_cache[key]
 
-        self.account_cache[cache_key] = token
-        self.stats['account_tokenised'] += 1
+        self.customer_token_cache[cache_key] = token
+        self.stats['customer_tokens'] += 1
         self.stats['tokenisation_total_ms'] += (time.perf_counter() - start) * 1000
 
         return token, False
 
-    # Message Parsing - FIXED for dict input
-
-    def parse_mpesa_message(self, raw_message: Union[str, Dict]) -> Optional[Dict]:
+    def tokenise_reference(self, ref: str) -> Tuple[Optional[str], bool]:
         """
-        Parse M-Pesa Daraja webhook message.
+        Tokenise transaction reference for tracking
+        Format: FLW_REF_{hash}
+        """
+        if not ref:
+            return None, False
+
+        cache_key = self._cache_key(ref, "ref")
+
+        if cache_key in self.ref_token_cache:
+            return self.ref_token_cache[cache_key], True
+
+        start = time.perf_counter()
+
+        token_hash = hmac.new(
+            self.config.hmac_secret.encode(),
+            ref.encode(),
+            hashlib.sha256
+        ).hexdigest()[:12].upper()
+
+        token = f"FLW_REF_{token_hash}"
+
+        if len(self.ref_token_cache) >= self.config.max_cache_size:
+            evict_count = self.config.max_cache_size // 5
+            for key in list(self.ref_token_cache.keys())[:evict_count]:
+                del self.ref_token_cache[key]
+
+        self.ref_token_cache[cache_key] = token
+        self.stats['tokenisation_total_ms'] += (time.perf_counter() - start) * 1000
+
+        return token, False
+
+    # Message Parsing
+
+    def parse_flutterwave_message(self, raw_message: Union[str, Dict]) -> Optional[Dict]:
+        """
+        Parse Flutterwave webhook message.
         Handles both JSON string and dict input.
         """
         try:
@@ -265,73 +276,77 @@ class MpesaTokeniser:
                 logger.error(f"Unknown message type: {type(raw_message)}")
                 return None
 
-            # Check if message has webhook_payload wrapper (from test data)
+            # Extract webhook_payload if present (from test data)
             if 'webhook_payload' in tx:
                 tx = tx['webhook_payload']
 
-            # Extract source if present
-            source = tx.get('source', tx.get('source_type', 'MPESA_DARAJA'))
+            # Check if it's a Flutterwave webhook
+            event = tx.get('event', tx.get('event_type', ''))
+            data = tx.get('data', tx)
 
-            # Format 1: Standard M-Pesa API callback with TransactionType
-            if 'TransactionType' in tx:
-                return {
-                    'transaction_id': tx.get('TransID', str(uuid.uuid4())),
-                    'source': source,
-                    'source_type': 'MPESA_DARAJA',
-                    'transaction_type': tx.get('TransactionType'),
-                    'timestamp': self._parse_mpesa_timestamp(tx.get('TransTime')),
-                    'event_time_ms': int(time.time() * 1000),
-                    'msisdn': tx.get('MSISDN'),
-                    'amount': float(tx.get('TransAmount', 0)),
-                    'business_shortcode': tx.get('BusinessShortCode'),
-                    'bill_ref_number': tx.get('BillRefNumber'),
-                    'invoice_number': tx.get('InvoiceNumber'),
-                    'org_account_balance': tx.get('OrgAccountBalance'),
-                    'third_party_trans_id': tx.get('ThirdPartyTransID'),
-                    'first_name': tx.get('FirstName'),
-                    'middle_name': tx.get('MiddleName'),
-                    'last_name': tx.get('LastName'),
-                    'transaction_receipt': tx.get('TransactionReceipt'),
-                }
+            # Extract card details
+            card_data = data.get('card', {})
+            customer_data = data.get('customer', {})
 
-            # Format 2: Daraja STKPush callback
-            elif 'Body' in tx and 'stkCallback' in tx.get('Body', {}):
-                stk = tx['Body']['stkCallback']
-                return {
-                    'transaction_id': stk.get('CheckoutRequestID', str(uuid.uuid4())),
-                    'source': source,
-                    'source_type': 'MPESA_DARAJA',
-                    'transaction_type': 'STKPush',
-                    'timestamp': datetime.now().isoformat(),
-                    'event_time_ms': int(time.time() * 1000),
-                    'msisdn': stk.get('PhoneNumber'),
-                    'amount': float(stk.get('Amount', 0)),
-                    'merchant_request_id': stk.get('MerchantRequestID'),
-                    'checkout_request_id': stk.get('CheckoutRequestID'),
-                    'result_code': stk.get('ResultCode'),
-                    'result_desc': stk.get('ResultDesc'),
-                    'mpesa_receipt_number': stk.get('MpesaReceiptNumber'),
-                    'transaction_date': stk.get('TransactionDate'),
-                }
+            # Get first 6 and last 4 from card
+            first6 = card_data.get('first_6digits', '')
+            last4 = card_data.get('last_4digits', '')
 
-            # Format 3: C2B webhook - TransactionType at top level
-            elif 'TransactionType' in tx:
-                return {
-                    'transaction_id': tx.get('TransID', str(uuid.uuid4())),
-                    'source': source,
-                    'source_type': 'MPESA_DARAJA',
-                    'transaction_type': tx.get('TransactionType'),
-                    'timestamp': datetime.now().isoformat(),
-                    'event_time_ms': int(time.time() * 1000),
-                    'msisdn': tx.get('MSISDN'),
-                    'amount': float(tx.get('TransAmount', 0)),
-                    'business_shortcode': tx.get('BusinessShortCode'),
-                    'bill_ref_number': tx.get('BillRefNumber'),
-                }
+            # If no card data, try to get from authorization
+            if not first6 and not last4:
+                auth_data = data.get('authorization', {})
+                first6 = auth_data.get('first_6digits', '')
+                last4 = auth_data.get('last_4digits', '')
 
-            else:
-                logger.warning(f"Unknown M-Pesa message format: {str(tx)[:200]}")
-                return None
+            # Extract customer info
+            customer_id = str(customer_data.get('id', ''))
+            customer_email = customer_data.get('email', '')
+            customer_phone = customer_data.get('phone_number', '')
+
+            # Extract transaction details
+            tx_ref = data.get('tx_ref', tx.get('tx_ref', ''))
+            flw_ref = data.get('flw_ref', tx.get('flw_ref', ''))
+            amount = float(data.get('amount', tx.get('amount', 0)))
+            currency = data.get('currency', tx.get('currency', 'USD'))
+            status = data.get('status', tx.get('status', ''))
+
+            # Determine payment type
+            payment_type = data.get('payment_type', tx.get('payment_type', 'card'))
+            charge_type = data.get('charge_type', '')
+
+            parsed = {
+                'transaction_id': flw_ref or tx_ref or str(uuid.uuid4()),
+                'source': 'FLUTTERWAVE',
+                'source_type': 'WEBHOOK',
+                'event': event,
+                'tx_ref': tx_ref,
+                'flw_ref': flw_ref,
+                'timestamp': datetime.now().isoformat(),
+                'event_time_ms': int(time.time() * 1000),
+
+                # Card details (partial)
+                'first6': first6,
+                'last4': last4,
+
+                # Customer details
+                'customer_id': customer_id,
+                'customer_email': customer_email,
+                'customer_phone': customer_phone,
+
+                # Transaction details
+                'amount': amount,
+                'currency': currency,
+                'status': status,
+                'payment_type': payment_type,
+                'charge_type': charge_type,
+
+                # Additional metadata
+                'device_fingerprint': data.get('device_fingerprint'),
+                'auth_model': data.get('auth_model'),
+                'processor_response': data.get('processor_response'),
+            }
+
+            return parsed
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error: {e}")
@@ -340,66 +355,52 @@ class MpesaTokeniser:
             logger.error(f"Parse error: {e}")
             return None
 
-    def _parse_mpesa_timestamp(self, trans_time: str) -> str:
-        """Parse M-Pesa timestamp (YYYYMMDDHHMMSS) to ISO format"""
-        if not trans_time or len(trans_time) != 14:
-            return datetime.now().isoformat()
-
-        try:
-            dt = datetime.strptime(trans_time, '%Y%m%d%H%M%S')
-            return dt.isoformat()
-        except ValueError:
-            return datetime.now().isoformat()
-
-    def _build_tokenised_message(self, parsed: Dict, msisdn_token: str,
-                                 account_token: str, from_cache: bool) -> Dict:
+    def _build_tokenised_message(self, parsed: Dict, card_token: str,
+                                 customer_token: str, ref_token: str,
+                                 from_cache: bool) -> Dict:
         """Build tokenised output message"""
-
-        # Determine if transaction is incoming or outgoing
-        transaction_role = "CUSTOMER"
-        if parsed.get('business_shortcode'):
-            transaction_role = "MERCHANT"
 
         return {
             'transaction_id': parsed['transaction_id'],
-            'source': parsed.get('source', 'MPESA'),
-            'source_type': parsed.get('source_type', 'DARAJA_WEBHOOK'),
-            'transaction_type': parsed.get('transaction_type'),
+            'source': parsed['source'],
+            'source_type': parsed['source_type'],
+            'event': parsed.get('event'),
+            'tx_ref': parsed.get('tx_ref'),
+            'flw_ref': parsed.get('flw_ref'),
             'timestamp': parsed['timestamp'],
             'event_time_ms': parsed['event_time_ms'],
             'tokenisation_timestamp': datetime.now().isoformat(),
 
-            # Tokenised fields (MSISDN replaced with token)
-            'msisdn_token': msisdn_token,
-            'account_token': account_token,
+            # Tokenised fields
+            'card_token': card_token,
+            'customer_token': customer_token,
+            'ref_token': ref_token,
             'token_from_cache': from_cache,
             'tokenisation_method': 'HMAC_SHA256_PSEUDONYMISATION',
 
-            # Transaction data (non-sensitive)
+            # Non-sensitive transaction data
             'amount': parsed.get('amount'),
-            'currency': 'KES',  # M-Pesa always KES
-            'bill_ref_number': parsed.get('bill_ref_number'),
-            'invoice_number': parsed.get('invoice_number'),
-            'transaction_receipt': parsed.get('transaction_receipt'),
-            'mpesa_receipt_number': parsed.get('mpesa_receipt_number'),
+            'currency': parsed.get('currency'),
+            'status': parsed.get('status'),
+            'payment_type': parsed.get('payment_type'),
+            'charge_type': parsed.get('charge_type'),
 
-            # Customer info (non-sensitive)
-            'first_name': parsed.get('first_name'),
-            'last_name': parsed.get('last_name'),
+            # Analytics fields (preserved for features)
+            'bin': parsed.get('first6'),
+            'last4': parsed.get('last4'),
 
-            # Transaction metadata
-            'result_code': parsed.get('result_code'),
-            'result_desc': parsed.get('result_desc'),
-            'transaction_role': transaction_role,
+            # Device and auth info
+            'device_fingerprint': parsed.get('device_fingerprint'),
+            'auth_model': parsed.get('auth_model'),
+            'processor_response': parsed.get('processor_response'),
 
-            # Raw references
-            'third_party_trans_id': parsed.get('third_party_trans_id'),
-            'merchant_request_id': parsed.get('merchant_request_id'),
-            'checkout_request_id': parsed.get('checkout_request_id'),
+            # Customer email/phone (non-sensitive - already pseudonymised by token)
+            'customer_email_hash': hashlib.md5(parsed.get('customer_email', '').encode()).hexdigest()[
+                :16] if parsed.get('customer_email') else None,
         }
 
     def process_message(self, message) -> bool:
-        """Process a single M-Pesa message"""
+        """Process a single Flutterwave message"""
         try:
             if message.value() is None:
                 logger.warning("Empty message — skipping")
@@ -423,32 +424,43 @@ class MpesaTokeniser:
                 tx_data = raw_value
 
             # Parse the message
-            parsed = self.parse_mpesa_message(tx_data)
+            parsed = self.parse_flutterwave_message(tx_data)
 
             if not parsed:
                 self._send_to_dlq(message, "Parse failure - unknown format")
                 return False
 
-            # Validate and tokenise MSISDN
-            msisdn = parsed.get('msisdn')
-            msisdn_token = None
-            from_cache = False
+            # Validate and tokenise card data
+            first6 = parsed.get('first6')
+            last4 = parsed.get('last4')
+            flw_ref = parsed.get('flw_ref')
 
-            if msisdn:
-                valid, error = self.validate_msisdn(msisdn)
+            card_token = None
+            if first6 and last4:
+                valid, error = self.validate_pan(first6, last4)
                 if not valid:
-                    self._send_to_dlq(message, f"MSISDN validation failed: {error}")
+                    self._send_to_dlq(message, f"Card validation failed: {error}")
                     return False
-                msisdn_token, from_cache = self.tokenise_msisdn(msisdn)
+                card_token, from_cache = self.tokenise_card(first6, last4, flw_ref)
+            else:
+                from_cache = False
+                # No card data - use reference as fallback
+                if flw_ref:
+                    card_token, from_cache = self.tokenise_reference(flw_ref)
 
-            # Tokenise business account if present
-            account = parsed.get('business_shortcode')
-            account_token, _ = self.tokenise_account(account) if account else (None, False)
+            # Tokenise customer
+            customer_id = parsed.get('customer_id')
+            customer_email = parsed.get('customer_email')
+            customer_phone = parsed.get('customer_phone')
+            customer_token, _ = self.tokenise_customer(customer_id, customer_email, customer_phone)
 
-            output = self._build_tokenised_message(parsed, msisdn_token, account_token, from_cache)
+            # Tokenise reference
+            ref_token, _ = self.tokenise_reference(parsed.get('tx_ref'))
 
-            # Use token as partition key for consistent routing
-            key = msisdn_token.encode('utf-8') if msisdn_token else parsed['transaction_id'].encode('utf-8')
+            output = self._build_tokenised_message(parsed, card_token, customer_token, ref_token, from_cache)
+
+            # Use card token as partition key for consistent routing
+            key = (card_token or customer_token or ref_token or parsed['transaction_id']).encode('utf-8')
 
             self.producer.produce(
                 topic=self.config.output_topic,
@@ -489,7 +501,7 @@ class MpesaTokeniser:
                 'topic': message.topic(),
                 'partition': message.partition(),
                 'offset': message.offset(),
-                'service': 'mpesa-tokeniser'
+                'service': 'flutterwave-tokeniser'
             }
             self.producer.produce(
                 topic=self.config.dlq_topic,
@@ -522,13 +534,13 @@ class MpesaTokeniser:
             if self.stats['cache_misses'] > 0 else 0
         )
 
-        logger.info("── M-Pesa Tokeniser Stats ──────────────────────")
+        logger.info("── Flutterwave Tokeniser Stats ──────────────────")
         logger.info(f"  Consumed:        {self.stats['total_consumed']}")
         logger.info(f"  Tokenised:       {self.stats['total_tokenised']}")
         logger.info(f"  DLQ:             {self.stats['total_dlq']}")
         logger.info(f"  Errors:          {self.stats['total_errors']}")
-        logger.info(f"  MSISDN tokens:   {self.stats['msisdn_tokenised']}")
-        logger.info(f"  Account tokens:  {self.stats['account_tokenised']}")
+        logger.info(f"  Card tokens:     {self.stats['card_tokens']}")
+        logger.info(f"  Customer tokens: {self.stats['customer_tokens']}")
         logger.info(f"  Cache hit rate:  {self.stats['cache_hits']}/{total_cache} ({hit_rate:.1%})")
         logger.info(f"  Avg token time:  {avg_ms:.3f} ms (cache misses)")
         logger.info("────────────────────────────────────────────────")
@@ -583,27 +595,27 @@ class MpesaTokeniser:
 
     def shutdown(self):
         """Clean shutdown"""
-        logger.info("Shutting down M-Pesa Tokeniser...")
+        logger.info("Shutting down Flutterwave Tokeniser...")
         self.print_stats()
         if self.producer:
             self.producer.flush(timeout=10)
         if self.consumer:
             self.consumer.close()
-        logger.info("M-Pesa Tokeniser stopped")
+        logger.info("Flutterwave Tokeniser stopped")
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='M-Pesa Tokeniser')
+    parser = argparse.ArgumentParser(description='Flutterwave Tokeniser')
     parser.add_argument('--bootstrap-servers', default='localhost:29092')
     parser.add_argument('--hmac-secret', default='CHANGE_ME_IN_PRODUCTION')
-    parser.add_argument('--input-topic', default='mpesa_raw')
-    parser.add_argument('--output-topic', default='mpesa_tokenised')
-    parser.add_argument('--dlq-topic', default='mpesa_dlq')
+    parser.add_argument('--input-topic', default='flutter_raw')
+    parser.add_argument('--output-topic', default='flutter_tokenised')
+    parser.add_argument('--dlq-topic', default='flutter_dlq')
     args = parser.parse_args()
 
-    config = MpesaTokeniserConfig(
+    config = FlutterwaveTokeniserConfig(
         bootstrap_servers=args.bootstrap_servers,
         hmac_secret=args.hmac_secret,
         input_topic=args.input_topic,
@@ -611,6 +623,6 @@ if __name__ == "__main__":
         dlq_topic=args.dlq_topic,
     )
 
-    tokeniser = MpesaTokeniser(config)
+    tokeniser = FlutterwaveTokeniser(config)
     tokeniser.setup()
     tokeniser.run()
