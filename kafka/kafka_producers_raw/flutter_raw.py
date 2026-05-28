@@ -6,29 +6,35 @@ import json
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-#Generate the visa data
-generator = TransactionDataGenerator()
-flutter_data=generator.generate_flutterwave_transaction()
 
-def produce_visa_transaction():
+def produce_flutter_transaction():
     producer_config = {
-        'bootstrap.servers': 'localhost:9092',
+        'bootstrap.servers': 'localhost:29092',  # external port from docker-compose
         'acks': 'all',
         'retries': 10,
-        'enable.idempotent': True
+        'enable.idempotence': True               # note: idempotence not idempotent
     }
 
-    producer = Producer(
-        producer_config,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
-    )
-
+    producer = Producer(producer_config)
+    generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100: #simulation of 100 transactions per minutes
-        producer.produce('flutter_raw',value=flutter_data)
-        count += 1
-        print(f'Record[{count}]:{flutter_data}')
-        producer.flush()
+    while count < 100:
+        flutter_data=generator.generate_flutterwave_transaction()
 
-        logger.info(f'Successfully produced record[{count}]:{flutter_data}')
+        producer.produce(
+            topic='flutter_raw',
+            value=json.dumps(flutter_data).encode('utf-8')
+        )
+
+        count += 1
+        producer.poll(0)   # serve delivery callbacks without blocking
+        print(f'Record [{count}]: {flutter_data}')
+        logger.info(f'Successfully produced record [{count}]')
+
+    producer.flush()       # flush once at the end, not inside the loop
+    logger.info('All records produced successfully')
+
+
+if __name__ == "__main__":
+    produce_flutter_transaction()
