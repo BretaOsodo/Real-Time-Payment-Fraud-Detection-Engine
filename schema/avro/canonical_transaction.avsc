@@ -1,0 +1,58 @@
+{
+  "type": "record",
+  "name": "CanonicalTransaction",
+  "namespace": "com.fraud.detection",
+  "version": "1",
+  "fields": [
+    {"name": "transaction_id", "type": "string"},
+    {"name": "provider", "type": {"type": "enum", "name": "Provider", "symbols": ["VISA", "MASTERCARD", "MPESA", "PESAPAL", "FLUTTERWAVE"]}},
+    {"name": "event_timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "processing_timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+
+    "customer_token": "string",
+    "card_token": ["null", "string"],
+    "account_token": ["null", "string"],
+
+    "merchant_id": ["null", "string"],
+    "merchant_name": ["null", "string"],
+    "merchant_country": ["null", "string"],
+    "mcc": ["null", "string"],
+
+    "amount": "double",
+    "currency": "string",
+    "amount_usd": "double",
+
+    "device_fingerprint": ["null", "string"],
+    "ip_address": ["null", "string"],
+    "ip_country": ["null", "string"],
+
+    "payment_channel": {"type": "enum", "name": "PaymentChannel", "symbols": ["POS", "ATM", "ECOMMERCE", "MOBILE", "USSD", "QR"]},
+    "transaction_type": "string",
+    "auth_model": ["null", "string"],
+    "pos_entry_mode": ["null", "string"],
+    "status": {"type": "enum", "name": "TransactionStatus", "symbols": ["APPROVED", "DECLINED", "PENDING", "FAILED"]},
+
+    "bin": ["null", "string"],
+    "card_type": ["null", "string"],
+    "issuer_country": ["null", "string"],
+    "issuer_name": ["null", "string"],
+    "card_brand": ["null", "string"],
+    "is_prepaid": {"type": "boolean", "default": false},
+
+    "mcc_description": ["null", "string"],
+    "merchant_risk_score": ["null", "double"],
+    "merchant_fraud_rate": ["null", "double"],
+
+    "velocity_features": {"type": "map", "values": "long"},
+    "aggregate_features": {"type": "map", "values": "double"},
+    "risk_signals": {"type": "map", "values": "boolean"},
+    "device_risk_score": ["null", "double"],
+
+    "fraud_score": ["null", "double"],
+    "is_fraud": {"type": "boolean", "default": false},
+    "rule_triggers": {"type": "array", "items": "string"},
+
+    "enrichment_latency_ms": "int",
+    "partition_key": "string"
+  ]
+}
