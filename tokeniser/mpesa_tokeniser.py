@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MpesaTokeniserConfig:
-    bootstrap_servers: str = "localhost:29092"
+    bootstrap_servers: str = "localhost:9092"
     security_protocol: str = "PLAINTEXT"
     sasl_mechanism: str = "PLAIN"
     sasl_username: str = ""

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TokeniserConfig:
-    bootstrap_servers: str = "localhost:29092"   # external Docker port
+    bootstrap_servers: str = "localhost:9092"   # external Docker port
     security_protocol: str = "PLAINTEXT"
     sasl_mechanism: str = "PLAIN"
     sasl_username: str = ""

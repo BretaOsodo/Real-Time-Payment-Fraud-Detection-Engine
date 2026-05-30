@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def produce_visa_transaction():
     producer_config = {
-        'bootstrap.servers': 'localhost:29092,localhost:39092',  # external port from docker-compose
+        'bootstrap.servers': 'localhost:9092',  # external port from docker-compose
         'acks': 'all',
         'retries': 10,
         'enable.idempotence': True               # note: idempotence not idempotent
