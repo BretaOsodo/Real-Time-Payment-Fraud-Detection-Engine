@@ -3,10 +3,7 @@ networks:
     driver: bridge
 
 volumes:
-  kafka-controller-1-data:
-  kafka-controller-2-data:
-  kafka-broker-1-data:
-  kafka-broker-2-data:
+  kafka-data:
   postgres-db-volume:
 
   metadata_data: {}
@@ -21,128 +18,41 @@ x-cluster-id: &cluster-id "bgVKLUurTM6-Wx0gyGaPxQ"
 
 services:
 
-  kafka-controller-1:
+  kafka:
     image: confluentinc/cp-kafka:7.7.0
-    container_name: kafka-controller-1
-    hostname: kafka-controller-1
-    networks:
-      - data_pipeline
-    volumes:
-      - kafka-controller-1-data:/var/lib/kafka/data
+    container_name: kafka
+    hostname: kafka
+
+    ports:
+      - "9092:9092"
+
     environment:
-      CLUSTER_ID: *cluster-id
+      CLUSTER_ID: bgVKLUurTM6-Wx0gyGaPxQ
 
       KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: controller
+      KAFKA_PROCESS_ROLES: "broker,controller"
 
-      KAFKA_LISTENERS: CONTROLLER://:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093"
 
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092"
 
-      KAFKA_CONTROLLER_QUORUM_VOTERS: >
-        1@kafka-controller-1:9093,
-        2@kafka-controller-2:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
 
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
 
-  kafka-controller-2:
-    image: confluentinc/cp-kafka:7.7.0
-    container_name: kafka-controller-2
-    hostname: kafka-controller-2
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
     networks:
       - data_pipeline
-    volumes:
-      - kafka-controller-2-data:/var/lib/kafka/data
-    environment:
-      CLUSTER_ID: *cluster-id
-
-      KAFKA_NODE_ID: 2
-      KAFKA_PROCESS_ROLES: controller
-
-      KAFKA_LISTENERS: CONTROLLER://:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
-
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-
-      KAFKA_CONTROLLER_QUORUM_VOTERS: >
-        1@kafka-controller-1:9093,
-        2@kafka-controller-2:9093
-
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-
-  # BROKERS
-  kafka-broker-1:
-    image: confluentinc/cp-kafka:7.7.0
-    container_name: kafka-broker-1
-    hostname: kafka-broker-1
-
-    ports:
-      - "29092:9092"
-
-    environment:
-      CLUSTER_ID: bgVKLUurTM6-Wx0gyGaPxQ
-      KAFKA_NODE_ID: 4
-      KAFKA_PROCESS_ROLES: broker
-
-      # Controllers
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-controller-1:9093,2@kafka-controller-2:9093"
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-
-      # Listeners
-      KAFKA_LISTENERS: "PLAINTEXT://:19092,PLAINTEXT_HOST://:9092"
-
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-broker-1:19092,PLAINTEXT_HOST://localhost:29092"
-
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
-
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-
-      # Replication
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
-      KAFKA_MIN_INSYNC_REPLICAS: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-
-      # Performance
-      KAFKA_NUM_PARTITIONS: 6
-
-  kafka-broker-2:
-    image: confluentinc/cp-kafka:7.7.0
-    container_name: kafka-broker-2
-    hostname: kafka-broker-2
-
-    ports:
-      - "39092:9092"
-
-    environment:
-      CLUSTER_ID: bgVKLUurTM6-Wx0gyGaPxQ
-      KAFKA_NODE_ID: 5
-      KAFKA_PROCESS_ROLES: broker
-
-      # Controllers
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-controller-1:9093,2@kafka-controller-2:9093"
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-
-      # Listeners
-      KAFKA_LISTENERS: "PLAINTEXT://:19092,PLAINTEXT_HOST://:9092"
-
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-broker-2:19092,PLAINTEXT_HOST://localhost:39092"
-
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
-
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-
-      # Replication
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
-      KAFKA_MIN_INSYNC_REPLICAS: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-
-      # Performance
-      KAFKA_NUM_PARTITIONS: 6
 
   kafdrop:
     image: obsidiandynamics/kafdrop:latest
@@ -155,8 +65,7 @@ services:
       JVM_OPTS: "-Xms32M -Xmx128M"
       SERVER_SERVLET_CONTEXTPATH: "/"
     depends_on:
-      - kafka-broker-1
-      - kafka-broker-2
+      - kafka
 
     networks:
       - data_pipeline
