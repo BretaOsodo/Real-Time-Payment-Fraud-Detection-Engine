@@ -7,11 +7,11 @@ import time
 processes = []
 
 scripts = [
-    "visa_raw_producer.py",
-    "mastercard_raw_producer.py",
-    "mpesa_raw_producer.py",
-    "pesapal_raw_producer.py",
-    "flutterwave_raw_producer.py"
+    "visa_raw.py",
+    "mastercard_raw.py",
+    "mpesa_raw.py",
+    "pesapal_raw.py",
+    "flutter_raw.py"
 ]
 
 
