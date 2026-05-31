@@ -19,7 +19,7 @@ def produce_mpesa_transaction():
     generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100:
+    while count < 100000:
         mpesa_data=generator.generate_mpesa_transaction()
 
         producer.produce(

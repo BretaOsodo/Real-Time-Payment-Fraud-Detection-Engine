@@ -19,7 +19,7 @@ def produce_pesapal_transaction():
     generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100:
+    while count < 100000:
         pesapal_data=generator.generate_pesapal_transaction()
 
         producer.produce(

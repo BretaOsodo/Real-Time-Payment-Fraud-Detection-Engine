@@ -19,7 +19,7 @@ def produce_mastercard_transaction():
     generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100:
+    while count < 100000:
         mastercard_data=generator.generate_mastercard_transaction()
 
         producer.produce(

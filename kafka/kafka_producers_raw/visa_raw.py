@@ -19,7 +19,7 @@ def produce_visa_transaction():
     generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100:
+    while count < 100000:
         visa_data = generator.generate_visa_transaction()
 
         producer.produce(

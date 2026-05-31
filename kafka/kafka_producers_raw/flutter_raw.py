@@ -19,7 +19,7 @@ def produce_flutter_transaction():
     generator = TransactionDataGenerator()
     count = 0
 
-    while count < 100:
+    while count < 100000:
         flutter_data=generator.generate_flutterwave_transaction()
 
         producer.produce(

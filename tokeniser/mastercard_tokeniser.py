@@ -518,7 +518,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Mastercard Tokeniser')
-    parser.add_argument('--bootstrap-servers', default='localhost:29092')
+    parser.add_argument('--bootstrap-servers', default='localhost:9092')
     parser.add_argument('--hmac-secret', default='CHANGE_ME_IN_PRODUCTION')
     parser.add_argument('--input-topic', default='mastercard_raw')
     parser.add_argument('--output-topic', default='mastercard_tokenised')
