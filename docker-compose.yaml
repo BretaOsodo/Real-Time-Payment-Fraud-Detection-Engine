@@ -70,7 +70,7 @@ services:
     networks:
       - data_pipeline
   spark-master:
-    image: apache/spark:4.0.0
+    build: .
     container_name: spark-master
     environment:
       AWS_ACCESS_KEY_ID: minio_admin
@@ -83,13 +83,13 @@ services:
       - "9090:8080"
       - "7077:7077"
     volumes:
-      - ./jobs:/opt/spark_jobs/jobs
+      - ./:/opt/project
     networks:
       - data_pipeline
     restart: unless-stopped
 
   spark-worker-1:
-    image: apache/spark:4.0.0
+    build: .
     container_name: spark-worker
     command:
       - /opt/spark/bin/spark-class
@@ -104,13 +104,13 @@ services:
       SPARK_MASTER_URL: spark://spark-master:7077
 
     volumes:
-      - ./jobs:/opt/spark_jobs/jobs
+      - ./:/opt/project
     networks:
       - data_pipeline
     restart: unless-stopped
 
   spark-worker-2:
-    image: apache/spark:4.0.0
+    build: .
     container_name: spark-worker-2
     command:
       - /opt/spark/bin/spark-class
@@ -125,7 +125,7 @@ services:
       SPARK_MASTER_URL: spark://spark-master:7077
 
     volumes:
-      - ./jobs:/opt/spark_jobs/jobs
+      - ./:/opt/project
     networks:
       - data_pipeline
     restart: unless-stopped

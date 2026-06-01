@@ -4,6 +4,12 @@ Production-Grade Spark Structured Streaming Enrichment Pipeline
 Architecture:
     Kafka(*_tokenised)-> Spark Streaming-> Enrichment->Kafka(*_enriched)
 """
+import os
+import sys
+
+os.environ["PYSPARK_PYTHON"] = "/usr/bin/python3"
+os.environ["PYSPARK_DRIVER_PYTHON"] = "/usr/bin/python3"
+
 
 import os
 import json
@@ -27,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 
+
+
 class FraudEnrichmentPipeline:
     """
     Main Enrichments pipeline for fraud detection.
@@ -42,7 +50,7 @@ class FraudEnrichmentPipeline:
         self.broadcast_join_manager = BroadcastJoinManager()
         self.redis_store = RedisStateStore()
         self.metrics=MetricsCollector()
-        self.dlq=DeadLetterQueue(dlq_topics=self.config.DLQ_TOPICS)
+        self.dlq=DeadLetterQueue(dlq_topic=self.config.DLQ_TOPIC)
 
     def create_spark_session(self) -> SparkSession:
         builder=(
@@ -54,7 +62,10 @@ class FraudEnrichmentPipeline:
                 "spark.sql.streaming.checkpointLocation",
                 self.config.CHECKPOINT_BASE
             )
-            .config("spark.sql.streaming.stateStore.maintenanceInterval", "5")
+            .config("spark.pyspark.python", "/usr/bin/python3")
+            .config("spark.pyspark.driver.python", "/usr/bin/python3")
+            .config("spark.python.worker.faulthandler.enabled", "true")
+            .config("spark.sql.streaming.stateStore.maintenanceInterval", "5s")
             .config("spark.sql.streaming.stateStore.minDeltasForSnapshot", "5")
 
             #Adaptive Query execution
@@ -223,7 +234,7 @@ class FraudEnrichmentPipeline:
         df = self.normalizer.normalize(df)
 
         #step 3: Broadcast joins
-        df=self.broadcast_join.apply_all_joins(df)
+        df=self.broadcast_join_manager.apply_all_joins(df)
 
         #step 4
         df = self._add_derived_signals(df)
@@ -410,7 +421,7 @@ class FraudEnrichmentPipeline:
             logger.warning(f"Redis unavailable: {exc} — using fallback FX rates")
             redis_client = None
 
-        self.broadcast_joins.initialize(self.spark, redis_client)
+        self.broadcast_join_manager.initialize(self.spark, redis_client)
         logger.info("Broadcast reference tables loaded")
 
         # Initialise Redis state store
@@ -458,8 +469,8 @@ class FraudEnrichmentPipeline:
             self.redis_store.close()
             logger.info("Pipeline shutdown complete")
 
-    if __name__ == "__main__":
-        pipeline = FraudEnrichmentPipeline()
-        pipeline.run()
+if __name__ == "__main__":
+    pipeline = FraudEnrichmentPipeline()
+    pipeline.run()
 
 
